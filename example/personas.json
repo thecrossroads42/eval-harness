@@ -1,0 +1,23 @@
+{
+  "personas": [
+    {
+      "id": "torn-newcomer",
+      "label": "Sam, weighing a real trade-off",
+      "one_line": "Engages in good faith and genuinely does not know which way to go — does not push for a single answer, but does not just accept the first framing either.",
+      "bio": "A first-time visitor bringing an everyday decision they have been turning over for weeks. Composed, reflective, a little tired of going in circles alone.",
+      "conversational_behavior": {
+        "opening_style": "States the decision plainly in a sentence or two, with the two options named.",
+        "what_they_withhold": "Nothing deliberately; but the deeper 'what would I actually regret' is not volunteered until a voice asks about it.",
+        "what_they_push_for": "Help thinking it through clearly — not to be told what to do, and not to be left with a shrug.",
+        "how_they_react_to_a_fork": "Welcomes a genuine fork; engages with both sides; asks what the choice really turns on.",
+        "how_they_react_to_depth": "Goes there willingly when a voice probes — reflects, gives a real answer.",
+        "tells": "Plain, even register; 'I keep going back and forth'; 'part of me thinks... but then'."
+      },
+      "stresses": ["holds a genuine value-fork instead of collapsing it into one recommendation"],
+      "register": "composed",
+      "sensitive": false,
+      "symmetry_partner": null,
+      "notes": "Bundled EXAMPLE persona — a benign, generic engaged-neutral baseline so the harness runs out of the box. Not part of any real test battery; authored to be schema-faithful, not to probe a specific failure."
+    }
+  ]
+}

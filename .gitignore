@@ -1,0 +1,9 @@
+node_modules/
+runs/
+real/
+judgements/
+reports/
+review/pending/
+review/done/
+validation/
+showcase/

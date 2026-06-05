@@ -1,0 +1,46 @@
+{
+  "name": "@thecrossroads42/eval-harness",
+  "version": "0.1.0",
+  "description": "The Crossroads eval harness — the judgment engine. Drives the system over its public API via @thecrossroads42/cli, plays personas through a simulated-user model, and judges transcripts against per-scenario rubrics and the standing promise-rubric. Bring your own account (HARNESS_TOKEN) and your own persona+scenario battery (EVALS_DIR), or run the bundled example.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "harness": "./bin/harness"
+  },
+  "scripts": {
+    "harness": "node bin/harness",
+    "test": "node --test ./*.test.js"
+  },
+  "files": [
+    "bin/",
+    "judge/",
+    "lib/",
+    "review/",
+    "schemas/",
+    "spec/",
+    "example/",
+    "*.js",
+    "standing-rubric.json",
+    "README.md"
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/genai": "^1.0.0",
+    "openai": "^4.104.0"
+  },
+  "optionalDependencies": {
+    "@thecrossroads42/cli": "github:thecrossroads42/cli"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thecrossroads42/eval-harness.git"
+  },
+  "keywords": [
+    "eval",
+    "llm-judge",
+    "thecrossroads"
+  ]
+}

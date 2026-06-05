@@ -1,0 +1,385 @@
+#!/usr/bin/env node
+// =============================================================================
+// The Crossroads eval harness — command dispatcher.
+//
+//   harness validate [--accept]              simulated-user behavior gate (§3.3)
+//   harness run [--scenario X] [--persona Y] [--repeat N] [--credit USD] [--force] [--no-keep]
+//   harness ingest --file <visit.json|dir>   ingest real sessions for judgement
+//   harness judge [--version V] [--tier a|b|all] | --real (standing rubric)
+//   harness review [--merge]
+//   harness report [--version V] [--diff A B]
+//   harness leads [--version V]
+//   harness clean [--users] [--scratch] [--purge] [--dry-run]
+//   harness version
+//   harness <command> --help                 per-command options
+// =============================================================================
+
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import {
+  assertHygiene, requireKeys, describeModels, models, apiUrl, token,
+  VALIDATION_DIR, runner as runnerCfg,
+} from '../config.js';
+import { computeVersion } from '../version.js';
+import { expandMatrix } from '../loader.js';
+import { runSpecs } from '../runner.js';
+import { checkBackend, __setAuthBackend } from '../authBackend.js';
+
+const [, , cmd, ...rest] = process.argv;
+const flag = (name) => {
+  const i = rest.indexOf(name);
+  return i >= 0 && i + 1 < rest.length ? rest[i + 1] : undefined;
+};
+const has = (name) => rest.includes(name);
+
+function die(msg) {
+  process.stderr.write(`error: ${msg}\n`);
+  process.exit(1);
+}
+
+// USD credit to grant each throwaway test user (--credit). Undefined when the
+// flag is absent, so the runner falls back to runner.defaultCreditUsd ($2).
+function creditFlag() {
+  const raw = flag('--credit');
+  if (raw === undefined) return undefined;
+  const usd = parseFloat(raw);
+  if (!Number.isFinite(usd) || usd <= 0) die(`--credit must be a positive number, got "${raw}".`);
+  return usd;
+}
+
+const VALIDATION_STAMP = path.join(VALIDATION_DIR, 'validated.json');
+
+async function readStamp() {
+  try {
+    return JSON.parse(await fs.readFile(VALIDATION_STAMP, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function cmdVersion() {
+  const v = await computeVersion();
+  process.stdout.write(`version key:  ${v.key}\n`);
+  process.stdout.write(`full sha256:  ${v.fullHash}\n`);
+  process.stdout.write(`prompt files: ${v.fileCount}\n`);
+  process.stdout.write(`backend:      ${apiUrl}\n\n`);
+  process.stdout.write(`models:\n${describeModels()}\n`);
+}
+
+async function preflight(needProviders) {
+  assertHygiene();
+  requireKeys(needProviders);
+  // A run needs an identity to talk to the backend as: either a token (BYO —
+  // your own account) or an injected admin provisioner (HARNESS_AUTH_BACKEND,
+  // which mints a throwaway user per run). Fail fast if neither is configured.
+  if (!token && !process.env.HARNESS_AUTH_BACKEND) {
+    die('no auth: set HARNESS_TOKEN to your `tcr_` API key, or HARNESS_AUTH_BACKEND to an admin provisioner.');
+  }
+  if (!(await checkBackend())) die(`backend not reachable at ${apiUrl} (is it running?).`);
+}
+
+async function cmdRun() {
+  // A run only needs the simulated-user provider's key; the backend supplies
+  // its own ANTHROPIC key for the orchestration.
+  await preflight([models.simulatedUser.provider]);
+
+  const version = await computeVersion();
+
+  // The validation gate is version-scoped: an acceptance only counts for the
+  // version it was recorded against. Changing the prompts under test changes
+  // the version key, which makes a prior acceptance stale (re-validate).
+  if (!has('--force')) {
+    const stamp = await readStamp();
+    if (!stamp?.accepted) {
+      die(
+        'simulated-user validation gate not passed. Run `harness validate`, read the user-side\n' +
+        'transcripts by hand, then `harness validate --accept`. Or bypass with --force (not recommended).'
+      );
+    }
+    if (stamp.versionKey !== version.key) {
+      die(
+        `validation gate is stale: accepted for version ${stamp.versionKey}, but the current\n` +
+        `version is ${version.key} (the prompts under test changed). Re-run \`harness validate\`,\n` +
+        'read the transcripts, then `harness validate --accept`. Or bypass with --force.'
+      );
+    }
+  }
+
+  const filter = {};
+  if (flag('--scenario')) filter.scenario = flag('--scenario');
+  if (flag('--persona')) filter.persona = flag('--persona');
+  if (flag('--repeat') != null) filter.repeat = parseInt(flag('--repeat'), 10);
+
+  const { specs, scenarioById, personaById } = await expandMatrix(filter);
+  if (specs.length === 0) die('no runs matched the given filters.');
+
+  const keep = !has('--no-keep');
+  const creditUsd = creditFlag();
+  const effectiveCredit = creditUsd ?? runnerCfg.defaultCreditUsd;
+
+  process.stdout.write(`version ${version.key} — ${specs.length} run(s), concurrency ${runnerCfg.concurrency}\n`);
+  process.stdout.write(`sim user: ${models.simulatedUser.provider}/${models.simulatedUser.model}\n`);
+  process.stdout.write(`credit:   $${effectiveCredit.toFixed(2)} granted per test user\n`);
+  if (keep) {
+    const { SHOWCASE_DIR } = await import('../config.js');
+    process.stdout.write(`showcase: finished sessions written to ${SHOWCASE_DIR} — review and git commit them\n`);
+  } else {
+    process.stdout.write('showcase: --no-keep (sessions NOT written to showcase/)\n');
+  }
+  if (process.env.HARNESS_LOG) process.stdout.write(`live log: ${process.env.HARNESS_LOG} (tail -f it)\n`);
+  process.stdout.write('\n');
+
+  const counts = {};
+  await runSpecs({
+    specs, scenarioById, personaById, version, keep, creditUsd,
+    onProgress: (t, done, total) => {
+      counts[t.status] = (counts[t.status] || 0) + 1;
+      const tag = t.status === 'ok' ? 'ok' : `** ${t.status}`;
+      process.stdout.write(
+        `[${String(done).padStart(3)}/${total}] ${t.scenarioId} / ${t.personaId} #${t.repeatIndex} ` +
+        `— ${t.chatTurns} turns — ${tag}${t.sutError ? ` (${t.sutError})` : ''}\n`
+      );
+    },
+  });
+
+  process.stdout.write(`\ndone. status counts: ${JSON.stringify(counts)}\n`);
+  process.stdout.write(`transcripts under runs/${version.key}\n`);
+}
+
+const HELP = {
+  validate: `usage: harness validate [--persona <id>] [--accept] [--no-keep]
+
+Simulated-user behavior gate (§3.3). Plays each persona against the backend and
+writes the user-side transcripts for you to read by hand. Run it, read them,
+then re-run with --accept to record the gate as passed.
+
+  --persona <id>   restrict to a single persona
+  --accept         record the gate as passed (after reading the transcripts)
+  --credit <usd>   credit granted to each throwaway test user (default: $2)
+  --no-keep        do not write finished sessions into the showcase/ directory`,
+
+  run: `usage: harness run [--scenario <id>] [--persona <id>] [--repeat <n>] [--force] [--no-keep]
+
+Run the eval matrix against the real CLI -> real backend, playing personas via
+the simulated-user model and capturing transcripts under runs/<version>.
+Requires the validation gate to have passed for the current prompt version
+(see \`harness validate\`); changing the prompts makes a prior acceptance stale.
+
+  --scenario <id>  restrict to a single scenario
+  --persona <id>   restrict to a single persona
+  --repeat <n>     restrict to a single repeat index
+  --credit <usd>   credit granted to each throwaway test user (default: $2)
+  --force          run even if the validation gate hasn't passed (not recommended)
+  --no-keep        do not write finished sessions into the showcase/ directory`,
+
+  ingest: `usage: harness ingest --file <visit.json|dir>
+
+Ingest real (already-happened) sessions for judgement under the standing
+promise-rubric. Accepts a single visit JSON or a directory of them.
+
+  --file <path>    a visit JSON file or a directory of them (required)`,
+
+  judge: `usage: harness judge [--version <key>] [--tier a|b|all]
+       harness judge --real
+
+Judge sessions. By default judges generated sessions for a version against the
+per-scenario rubrics; --real judges ingested real sessions against the standing
+rubric.
+
+  --version <key>  version to judge (default: current)
+  --tier a|b|all   which judge tier(s) to run (default: all)
+  --real           judge ingested real sessions instead of generated ones`,
+
+  review: `usage: harness review [--version <key>] [--merge]
+
+Blind human review of Tier-B items.
+
+  --version <key>  version to review (default: current)
+  --merge          merge completed review verdicts`,
+
+  report: `usage: harness report [--version <key>] [--diff <A> <B>]
+
+Scorecard / clusters / fairness / safety for a version, or a diff between two.
+
+  --version <key>  version to report on (default: current)
+  --diff <A> <B>   compare two version keys`,
+
+  leads: `usage: harness leads [--version <key>]
+
+Leads view for a version.
+
+  --version <key>  version (default: current)`,
+
+  convergence: `usage: harness convergence [--metric distinctiveness|substance|synthesis|all] [--version <key>] [--file <transcript.json>]
+
+The convergence panel — corpus-level signals for the "one voice wearing masks"
+threat (corpus/threats.md). Scores stored transcripts with a cross-family judge.
+Three metrics, meant to be read together (default: all):
+
+  distinctiveness  voice STYLE   — strip labels, shuffle, re-attribute each turn.
+                                   Low accuracy => the voices can't be told apart.
+  substance        voice CONTENT — per turn, did each debater add a consideration
+                                   the primary couldn't have produced itself?
+  synthesis        the KEEPER    — for genuine forks, did the synthesis PRESERVE it,
+                                   LEAN, or COLLAPSE it into a centrist answer?
+
+High distinctiveness + low substance = costume (distinct diction, same argument).
+synthesis is the most exposed to judge-shared-bias, so its number is PROVISIONAL
+(a human read is primary). Unlike \`judge\`, these measure an emergent property of
+the whole corpus, not per-session rubric conformance. BILLABLE — one judge call
+per transcript per selected metric.
+
+  --metric <name>  distinctiveness | substance | synthesis | all  (default: all)
+  --version <key>  version whose runs/ transcripts to score (default: current)
+  --file <path>    score a single transcript json instead`,
+
+  scorecard: `usage: harness scorecard [--version <key>] [--scenario <id>] [--persona <id>] [--repeat <n>] [--write]
+
+Draft per-visit scorecards for showcase visits from stored judgements, mapping
+the harness verdict + a cited quote onto the public \`scorecard\` field (see
+corpus/scorecard.md, docs/03). Dry-run by default (prints drafts); --write
+injects them into the showcase JSON.
+
+DERIVED only — status, the evidence quote, and version come from the judgement.
+The \`promise\` is a PLACEHOLDER you must rewrite into public phrasing, and the
+status wants a human sanity-check (fork checks are noisy on a single judge — run
+\`harness judge --tier all\` for the panel first). Nothing here auto-publishes:
+review the drafts, rewrite, set \`reviewed: human-reviewed\`, then commit. Stamp
+the version the visit was GENERATED at (don't scorecard a visit from a judge run
+of a different prompt).
+
+  --version <key>  judgement version to read (default: current prompt version)
+  --scenario <id>  restrict to one scenario
+  --persona <id>   restrict to one persona
+  --repeat <n>     restrict to one repeat index
+  --write          inject drafts into the showcase JSON (else dry-run)`,
+
+  clean: `usage: harness clean [--users] [--scratch] [--purge] [--dry-run]
+
+Prune leaked throwaway example.invalid users and regenerable local scratch.
+With no scope flag, does users + scratch. The committed showcase/ directory is
+never touched. Preserves human review verdicts + the validation stamp unless
+--purge.
+
+  --users          only prune leaked throwaway users
+  --scratch        only remove local scratch (runs/judgements/reports/review pending)
+  --purge          also wipe review/done verdicts + the validation stamp
+  --dry-run        show what would be removed, delete nothing`,
+
+  version: `usage: harness version
+
+Print the version key (prompt fingerprint), full sha256, prompt file count,
+backend URL, and the resolved model registry.`,
+};
+
+function topLevelHelp() {
+  return `The Crossroads eval harness.
+
+usage: harness <command> [options]
+
+commands:
+  validate   simulated-user behavior gate (§3.3)
+  run        run the eval matrix against the real backend
+  ingest     ingest real sessions for judgement
+  judge      judge generated sessions (or --real for ingested)
+  review     blind human review of Tier-B items
+  report     scorecard / clusters / fairness / diff
+  leads      leads view for a version
+  convergence  the "one voice wearing masks" panel: voice style + content + Keeper fork-holding
+  scorecard  draft per-visit scorecards for showcase visits from judgements
+  clean      prune leaked throwaway users + local scratch
+  version    show version key + model registry
+
+Run \`harness <command> --help\` for command-specific options.
+`;
+}
+
+async function main() {
+  // Help (handled before any preflight, so `harness <cmd> --help` works
+  // without a backend or API keys). Covers `harness help [cmd]`,
+  // `harness --help`, and `harness <cmd> --help`.
+  if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    const sub = rest[0];
+    process.stdout.write(HELP[sub] ? `${HELP[sub]}\n` : topLevelHelp());
+    return;
+  }
+  if (has('--help') || has('-h')) {
+    process.stdout.write(HELP[cmd] ? `${HELP[cmd]}\n` : topLevelHelp());
+    return;
+  }
+
+  // Operator hook: HARNESS_AUTH_BACKEND points at a module that provisions
+  // throwaway users over the admin API (test/auth.js in this monorepo). Its
+  // exports replace the BYO defaults in authBackend.js. A public user leaves it
+  // unset and runs against their own account via HARNESS_TOKEN. Resolved against
+  // the cwd so the operator wrapper can pass a path relative to where it runs.
+  if (process.env.HARNESS_AUTH_BACKEND) {
+    const mod = await import(pathToFileURL(path.resolve(process.env.HARNESS_AUTH_BACKEND)).href);
+    __setAuthBackend(mod);
+  }
+
+  switch (cmd) {
+    case 'version':
+      return cmdVersion();
+    case 'run':
+      return cmdRun();
+    case 'validate': {
+      const { runValidation } = await import('../validate.js');
+      return runValidation({ accept: has('--accept'), only: flag('--persona'), keep: !has('--no-keep'), creditUsd: creditFlag() });
+    }
+    case 'ingest': {
+      const { runIngest } = await import('../ingest.js');
+      return runIngest({ file: flag('--file') });
+    }
+    case 'judge': {
+      if (has('--real')) {
+        const { runJudgeReal } = await import('../judge/index.js');
+        return runJudgeReal();
+      }
+      const { runJudge } = await import('../judge/index.js');
+      return runJudge({ version: flag('--version'), tier: flag('--tier') || 'all' });
+    }
+    case 'review': {
+      const { runReview } = await import('../review/queue.js');
+      return runReview({ merge: has('--merge'), version: flag('--version') });
+    }
+    case 'report': {
+      const { runReport } = await import('../reporter.js');
+      const diff = has('--diff') ? rest.slice(rest.indexOf('--diff') + 1, rest.indexOf('--diff') + 3) : null;
+      return runReport({ version: flag('--version'), diff });
+    }
+    case 'leads': {
+      const { runLeads } = await import('../leads.js');
+      return runLeads({ version: flag('--version') });
+    }
+    case 'convergence': {
+      // Offline judging of stored transcripts (the convergence panel): needs
+      // only the metrics' judge keys, not the backend or ADMIN_SECRET. Key
+      // preflight happens inside runConvergence for the selected metric(s).
+      const version = flag('--version') || (await computeVersion()).key;
+      const { runConvergence } = await import('../judge/convergence.js');
+      return runConvergence({ metric: flag('--metric') || 'all', version, file: flag('--file') });
+    }
+    case 'scorecard': {
+      const { runScorecard } = await import('../scorecard.js');
+      return runScorecard({
+        version: flag('--version'),
+        scenario: flag('--scenario'),
+        persona: flag('--persona'),
+        repeat: flag('--repeat') != null ? parseInt(flag('--repeat'), 10) : undefined,
+        write: has('--write'),
+      });
+    }
+    case 'clean': {
+      const { runClean } = await import('../clean.js');
+      return runClean({ dryRun: has('--dry-run'), purge: has('--purge'), users: has('--users'), scratch: has('--scratch') });
+    }
+    default:
+      if (cmd) {process.stderr.write(`error: unknown command "${cmd}"\n\n`);}
+      process.stdout.write(topLevelHelp());
+      process.exit(cmd ? 1 : 0);
+  }
+}
+
+main().catch((e) => die(e?.stack || e?.message || String(e)));
