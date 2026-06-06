@@ -61,8 +61,13 @@ Bring your own battery by pointing `EVALS_DIR` at a directory holding
 EVALS_DIR=./my-evals npx harness run --force
 ```
 
-Run `harness help` for the full command set (`validate`, `run`, `ingest`,
-`judge`, `review`, `report`, `convergence`, `scorecard`, `clean`).
+Run `harness help` for the full command set (`validate`, `run`, `literary`,
+`ingest`, `judge`, `review`, `report`, `convergence`, `scorecard`, `clean`).
+
+`harness literary` is a separate run-and-read mode for **literary personas** — a
+different object from the eval personas (opaque, withholding humans, run once and
+never judged) whose transcript is surfaced for a human to read. See
+`schemas/literary-personas-schema.md`.
 
 ### Auth: bring your own account
 

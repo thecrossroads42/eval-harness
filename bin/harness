@@ -4,6 +4,7 @@
 //
 //   harness validate [--accept]              simulated-user behavior gate (§3.3)
 //   harness run [--scenario X] [--persona Y] [--repeat N] [--credit USD] [--force] [--no-keep]
+//   harness literary [--persona Y]           run-and-read the literary persona probe
 //   harness ingest --file <visit.json|dir>   ingest real sessions for judgement
 //   harness judge [--version V] [--tier a|b|all] | --real (standing rubric)
 //   harness review [--merge]
@@ -173,6 +174,24 @@ Requires the validation gate to have passed for the current prompt version
   --force          run even if the validation gate hasn't passed (not recommended)
   --no-keep        do not write finished sessions into the showcase/ directory`,
 
+  literary: `usage: harness literary [--persona <id>] [--credit <usd>]
+
+Run-and-read the LITERARY persona probe (a different object from the eval
+personas): opaque, contradictory, withholding humans whose job is to be real
+enough that the voices must work. Each persona is self-contained (it carries its
+own opening) and is run ONCE, alone — never combinatorially against scenarios,
+and never judged. The deliverable is the full transcript, written to literary/
+for YOU to read; this week the thing judged is the PROBE (are the human turns
+real?), by your reading, not by a model.
+
+Probe transcripts are kept OUT of runs/ (so \`judge\` never picks them up) and are
+NOT archived to showcase/. A cooperative-drift POINTER (not a verdict) flags
+where to look. Unlike \`run\`, this needs no validation stamp — it IS a read-by-
+hand mode. BILLABLE: it drives real visits.
+
+  --persona <id>   run a single literary persona (default: all)
+  --credit <usd>   credit granted to each throwaway test user (default: $2)`,
+
   ingest: `usage: harness ingest --file <visit.json|dir>
 
 Ingest real (already-happened) sessions for judgement under the standing
@@ -281,6 +300,7 @@ usage: harness <command> [options]
 commands:
   validate   simulated-user behavior gate (§3.3)
   run        run the eval matrix against the real backend
+  literary   run-and-read the literary persona probe (no judge; transcript for human reading)
   ingest     ingest real sessions for judgement
   judge      judge generated sessions (or --real for ingested)
   review     blind human review of Tier-B items
@@ -327,6 +347,10 @@ async function main() {
     case 'validate': {
       const { runValidation } = await import('../validate.js');
       return runValidation({ accept: has('--accept'), only: flag('--persona'), keep: !has('--no-keep'), creditUsd: creditFlag() });
+    }
+    case 'literary': {
+      const { runLiterary } = await import('../literary.js');
+      return runLiterary({ only: flag('--persona'), creditUsd: creditFlag() });
     }
     case 'ingest': {
       const { runIngest } = await import('../ingest.js');

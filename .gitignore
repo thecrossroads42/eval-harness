@@ -1,4 +1,7 @@
 node_modules/
+# eval-harness is a clone-and-run tool, so it DOES track its lockfile (the
+# parent packages/.gitignore ignores package-lock.json for the libraries).
+!package-lock.json
 runs/
 real/
 judgements/

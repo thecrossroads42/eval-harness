@@ -126,7 +126,17 @@ export async function applySetup(userId, setup, progress = () => {}) {
   progress(`seeded prior state (${Object.keys(setup).join(', ')})`);
 }
 
-export async function runOne({ scenario, persona, repeatIndex, version, keep = true, creditUsd = runnerCfg.defaultCreditUsd }) {
+// `nextTurn` and `writeRuns` exist so the literary run-and-read mode can reuse
+// this transport unchanged: it injects a literary, self-contained simulated user
+// (no scenario) via `nextTurn`, and sets `writeRuns: false` so its probe
+// transcripts never land in runs/ (where `judge` would pick them up) — the
+// literary command persists them to its own dir instead. The eval matrix and the
+// validation gate pass neither, so their behavior is identical.
+export async function runOne({
+  scenario, persona, repeatIndex, version,
+  keep = true, creditUsd = runnerCfg.defaultCreditUsd,
+  nextTurn = nextUserTurn, writeRuns = true,
+}) {
   const startedAt = new Date().toISOString();
   const tag = `${scenario.id}/${persona.id}#${repeatIndex}`;
   const logStream = openLogStream();
@@ -262,7 +272,7 @@ export async function runOne({ scenario, persona, repeatIndex, version, keep = t
             }
             let next;
             try {
-              next = await nextUserTurn({ persona, scenario, turns });
+              next = await nextTurn({ persona, scenario, turns });
             } catch (e) {
               status = 'error';
               sutError = sutError || `simulated user failed: ${e.message}`;
@@ -320,7 +330,8 @@ export async function runOne({ scenario, persona, repeatIndex, version, keep = t
     // Always archive the raw per-visit LLM debug log (full prompts + raw
     // responses + usage) next to the transcript BEFORE the user is deleted —
     // it dies with the throwaway user, so this is the only chance to keep it.
-    if (visitId != null) {
+    // (writeRuns gates it: a literary probe writes nothing under runs/.)
+    if (writeRuns && visitId != null) {
       try {
         const gz = await fetchVisitDebug(email, visitId);
         if (gz) {
@@ -374,7 +385,9 @@ export async function runOne({ scenario, persona, repeatIndex, version, keep = t
     }
   }
 
-  await writeTranscript(transcript);
+  // The literary mode (writeRuns: false) keeps probe transcripts out of runs/
+  // so `judge` can never pick them up; it persists them to its own dir instead.
+  if (writeRuns) await writeTranscript(transcript);
   // Closed here, not in `finally`: the showcase-archive progress lines above
   // still need to reach the log file (they run after `finally`).
   if (logStream) logStream.end();

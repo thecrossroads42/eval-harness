@@ -66,13 +66,17 @@ export const JUDGEMENTS_DIR = path.join(OUT, 'judgements');
 export const REPORTS_DIR = path.join(OUT, 'reports');
 export const REVIEW_DIR = path.join(OUT, 'review');
 export const VALIDATION_DIR = path.join(OUT, 'validation');
+// Literary-probe transcripts for human reading. Kept OUT of runs/ on purpose:
+// these are never judged (no rubric) and never showcased (probe content), so
+// they live in their own dir the editor reads. See literary.js.
+export const LITERARY_DIR = path.join(OUT, 'literary');
 
 export const apiUrl = (process.env.API_URL || 'http://localhost:3001').replace(/\/+$/, '');
 
 // The token the CLI authenticates with when no admin provisioner is injected
 // (BYO: a `tcr_` personal API key, or a user id). Empty when the operator
 // injects an admin backend that mints a throwaway user per run instead.
-export const token = process.env.HARNESS_TOKEN || process.env.TOKEN || '';
+export const token = process.env.HARNESS_TOKEN || process.env.CROSSROADS_TOKEN || '';
 
 // Directory finished sessions are archived into for showcasing. The operator
 // points HARNESS_SHOWCASE_DIR at the repo's committed showcase/ dir (served
