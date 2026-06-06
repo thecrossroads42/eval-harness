@@ -32,7 +32,7 @@
     "openai": "^4.104.0"
   },
   "optionalDependencies": {
-    "@thecrossroads42/cli": "github:thecrossroads42/cli"
+    "@thecrossroads42/cli": "^0.1.0"
   },
   "repository": {
     "type": "git",
